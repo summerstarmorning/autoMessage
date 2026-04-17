@@ -13,9 +13,9 @@ on:
           - noon
           - night
   schedule:
-    - cron: '7 23 * * *'
-    - cron: '7 5 * * *'
-    - cron: '7 15 * * *'
+    - cron: '0 23 * * *'
+    - cron: '0 5 * * *'
+    - cron: '30 15 * * *'
 
 jobs:
   send-love-mail:
@@ -49,13 +49,13 @@ jobs:
           fi
 
           case "${{ github.event.schedule }}" in
-            "7 23 * * *")
+            "0 23 * * *")
               echo "LOVE_SLOT=morning" >> "$GITHUB_ENV"
               ;;
-            "7 5 * * *")
+            "0 5 * * *")
               echo "LOVE_SLOT=noon" >> "$GITHUB_ENV"
               ;;
-            "7 15 * * *")
+            "30 15 * * *")
               echo "LOVE_SLOT=night" >> "$GITHUB_ENV"
               ;;
             *)
