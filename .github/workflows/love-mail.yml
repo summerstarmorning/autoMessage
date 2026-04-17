@@ -1,0 +1,71 @@
+name: Love Mail
+
+on:
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: Which greeting slot to send
+        required: true
+        default: morning
+        type: choice
+        options:
+          - morning
+          - noon
+          - night
+  schedule:
+    - cron: '0 23 * * *'
+    - cron: '0 5 * * *'
+    - cron: '0 15 * * *'
+
+jobs:
+  send-love-mail:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai
+      AUTO_EMAIL_TIMEZONE: Asia/Shanghai
+      AUTO_EMAIL_PROVIDER: qq
+      AUTO_EMAIL_SMTP_HOST: smtp.qq.com
+      AUTO_EMAIL_SMTP_PORT: '465'
+      AUTO_EMAIL_USE_SSL: 'true'
+      AUTO_EMAIL_SMTP_USER: ${{ secrets.QQ_SMTP_USER }}
+      AUTO_EMAIL_SMTP_PASSWORD: ${{ secrets.QQ_SMTP_PASSWORD }}
+      AUTO_EMAIL_FROM: ${{ secrets.QQ_SMTP_USER }}
+      LOVE_MAIL_TO: ${{ secrets.LOVE_MAIL_TO }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve slot
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "LOVE_SLOT=${{ inputs.slot }}" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          case "${{ github.event.schedule }}" in
+            "0 23 * * *")
+              echo "LOVE_SLOT=morning" >> "$GITHUB_ENV"
+              ;;
+            "0 5 * * *")
+              echo "LOVE_SLOT=noon" >> "$GITHUB_ENV"
+              ;;
+            "0 15 * * *")
+              echo "LOVE_SLOT=night" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "Unknown schedule: ${{ github.event.schedule }}"
+              exit 1
+              ;;
+          esac
+
+      - name: Send timed greeting
+        run: |
+          python "plugins/auto-email/scripts/send_love_greeting.py" \
+            --slot "$LOVE_SLOT" \
+            --to "$LOVE_MAIL_TO"
