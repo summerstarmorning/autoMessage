@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and send a timed romantic greeting email with profile-based variations."""
+"""Generate and send a profile-driven love email with surprise cadence."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import argparse
 import datetime as dt
 import json
 import random
+import sys
+from dataclasses import dataclass
 from email.message import EmailMessage
 from html import escape
 from pathlib import Path
@@ -19,60 +21,37 @@ PROFILE_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "love_greeting_profile.json"
 )
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 DEFAULT_HOLIDAYS = {
-    "01-01": {
-        "name": "元旦",
-        "style": "新年",
-        "mood": "新一年的第一份偏爱先留给你。",
-    },
-    "02-14": {
-        "name": "情人节",
-        "style": "浪漫",
-        "mood": "今天就该理直气壮地多偏爱你一点。",
-    },
-    "03-08": {
-        "name": "女神节",
-        "style": "宠溺",
-        "mood": "今天的你就负责漂亮和开心，别的交给我来夸。",
-    },
-    "05-20": {
-        "name": "520",
-        "style": "表白",
-        "mood": "这种日子就适合认真告诉你，我是真的很喜欢你。",
-    },
-    "06-01": {
-        "name": "儿童节",
-        "style": "俏皮",
-        "mood": "今天允许你当一天被宠着的小朋友。",
-    },
-    "10-01": {
-        "name": "国庆节",
-        "style": "假期",
-        "mood": "假期要开心一点，也要记得被我惦记着。",
-    },
-    "12-24": {
-        "name": "平安夜",
-        "style": "温柔",
-        "mood": "今晚想把平安和偏爱一起打包给你。",
-    },
-    "12-25": {
-        "name": "圣诞节",
-        "style": "礼物感",
-        "mood": "今天的你像被节日特地偏爱了一下。",
-    },
+    "01-01": {"name": "元旦", "tone": "新年", "mood": "新一年的偏爱也先给你。"},
+    "02-14": {"name": "情人节", "tone": "浪漫", "mood": "今天适合明目张胆地多喜欢你一点。"},
+    "03-08": {"name": "女神节", "tone": "宠溺", "mood": "今天就请你负责漂亮和开心。"},
+    "05-20": {"name": "520", "tone": "表白", "mood": "这种日子就该认真说一句，我真的很喜欢你。"},
+    "06-01": {"name": "儿童节", "tone": "俏皮", "mood": "今天允许你当一天被宠着的小朋友。"},
+    "10-01": {"name": "国庆节", "tone": "假期", "mood": "假期也要被我惦记着，轻轻松松去开心。"},
+    "12-24": {"name": "平安夜", "tone": "温柔", "mood": "今晚想把平安和偏爱一起装进这封信里。"},
+    "12-25": {"name": "圣诞节", "tone": "礼物感", "mood": "今天的你像被节日特地偏爱了一下。"},
 }
 
 
+@dataclass
+class SendDecision:
+    should_send: bool
+    reason: str
+    context_kind: str
+    holiday_name: str | None = None
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Send a timed love greeting email.")
-    parser.add_argument("--slot", choices=["morning", "noon", "night"], required=True)
+    parser = argparse.ArgumentParser(description="Send a profile-driven love email.")
     parser.add_argument("--to", required=True, help="Recipient address")
-    parser.add_argument(
-        "--date",
-        help="Override local date in YYYY-MM-DD for testing variant rotation",
-    )
+    parser.add_argument("--date", help="Override local date in YYYY-MM-DD")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force-send", action="store_true")
     return parser.parse_args()
 
 
@@ -84,31 +63,32 @@ def current_timezone() -> ZoneInfo:
         raise SystemExit(f"Invalid AUTO_EMAIL_TIMEZONE value: {timezone_name}") from exc
 
 
-def resolve_date(date_text: str | None) -> dt.date:
+def resolve_now(date_text: str | None) -> dt.datetime:
+    tz = current_timezone()
     if date_text:
-        return dt.date.fromisoformat(date_text)
-    return dt.datetime.now(current_timezone()).date()
+        return dt.datetime.combine(dt.date.fromisoformat(date_text), dt.time(20, 17), tz)
+    return dt.datetime.now(tz)
 
 
 def load_profile() -> dict:
     return json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
 
 
-def build_rng(send_date: dt.date, slot: str) -> random.Random:
-    return random.Random(f"love-mail:{send_date.isoformat()}:{slot}")
+def build_rng(seed: str) -> random.Random:
+    return random.Random(seed)
 
 
 def choose(rng: random.Random, values: list[str]) -> str:
     return values[rng.randrange(len(values))]
 
 
-def pick_unique(rng: random.Random, values: list[str], count: int) -> list[str]:
+def choose_unique(rng: random.Random, values: list[str], count: int) -> list[str]:
     if len(values) <= count:
         return list(values)
     return rng.sample(values, count)
 
 
-def holiday_for_date(profile: dict, send_date: dt.date) -> dict | None:
+def find_holiday(profile: dict, send_date: dt.date) -> dict | None:
     date_key = send_date.strftime("%m-%d")
     custom = profile.get("special_dates", {})
     if date_key in custom:
@@ -120,151 +100,234 @@ def holiday_for_date(profile: dict, send_date: dt.date) -> dict | None:
     return None
 
 
-def slot_config(profile: dict, slot: str) -> dict:
-    return profile["slot_styles"][slot]
+def evaluate_send_decision(profile: dict, send_dt: dt.datetime, force_send: bool) -> SendDecision:
+    if force_send:
+        return SendDecision(True, "manual override", "manual")
 
-
-def day_context(profile: dict, send_date: dt.date) -> dict:
-    holiday = holiday_for_date(profile, send_date)
+    send_date = send_dt.date()
+    holiday = find_holiday(profile, send_date)
     if holiday is not None:
-        return {"kind": "holiday", "label": holiday["name"], "data": holiday}
-    if send_date.weekday() >= 5:
-        return {
-            "kind": "weekend",
-            "label": "周末",
-            "data": profile["weekend_style"],
-        }
-    return {"kind": "weekday", "label": "工作日", "data": {}}
+        return SendDecision(True, "holiday rule", "holiday", holiday["name"])
+
+    meet_date = dt.date.fromisoformat(profile["relationship"]["met_on"])
+    days_since_meet = (send_date - meet_date).days
+    cadence = profile["schedule"]
+    is_weekend = send_date.weekday() >= 5
+
+    if is_weekend and cadence.get("always_send_weekends", False):
+        return SendDecision(True, "weekend rule", "weekend")
+
+    weekday_interval = int(cadence.get("weekday_interval_days", 2))
+    if days_since_meet % weekday_interval == 0:
+        return SendDecision(
+            True,
+            f"weekday interval {weekday_interval}",
+            "weekend" if is_weekend else "weekday",
+        )
+
+    surprise_seed = f"{send_date.isoformat()}:{profile['relationship']['met_on']}:surprise"
+    surprise_rng = build_rng(surprise_seed)
+    threshold = float(cadence.get("surprise_probability", 0.16))
+    if surprise_rng.random() < threshold:
+        return SendDecision(
+            True,
+            "surprise rule",
+            "weekend" if is_weekend else "surprise",
+        )
+
+    return SendDecision(False, "cadence skip", "skip")
+
+
+def relationship_counter(profile: dict, send_dt: dt.datetime) -> dict[str, int]:
+    meet_dt = dt.datetime.fromisoformat(profile["relationship"]["met_on_datetime"]).replace(
+        tzinfo=current_timezone()
+    )
+    delta = send_dt - meet_dt
+    total_seconds = max(int(delta.total_seconds()), 0)
+    days = total_seconds // 86400
+    hours = total_seconds // 3600
+    minutes = total_seconds // 60
+    return {
+        "days": days,
+        "hours": hours,
+        "minutes": minutes,
+        "seconds": total_seconds,
+    }
+
+
+def theme_pack(profile: dict, rng: random.Random) -> dict:
+    return choose(rng, profile["ui_themes"])
 
 
 def build_subject(
-    rng: random.Random, profile: dict, slot: str, alias: str, context: dict
+    rng: random.Random,
+    profile: dict,
+    recipient_alias: str,
+    decision: SendDecision,
 ) -> str:
-    slot_name = slot_config(profile, slot)["title"]
-    base_subjects = [
-        f"{alias}，{slot_name}呀",
-        f"给{alias}的{slot_name}小信",
-        f"{alias}今天也要被偏爱",
-        f"{slot_name}时间到，来抱抱我的{alias}",
+    base = [
+        f"{recipient_alias}，今天这封信是给你的",
+        f"给{recipient_alias}的小惊喜",
+        f"{recipient_alias}，来拆一下我今天的偏爱",
+        f"今天也想悄悄偏心一下{recipient_alias}",
     ]
-    if context["kind"] == "holiday":
-        holiday_name = context["label"]
-        base_subjects.extend(
+    if decision.context_kind == "holiday" and decision.holiday_name:
+        base.extend(
             [
-                f"{holiday_name}快乐，{alias}",
-                f"{holiday_name}限定问候送给{alias}",
-                f"{alias}的{holiday_name}专属偏爱",
+                f"{decision.holiday_name}快乐，{recipient_alias}",
+                f"{recipient_alias}的{decision.holiday_name}限定来信",
             ]
         )
-    if context["kind"] == "weekend":
-        base_subjects.extend(
+    if decision.context_kind == "weekend":
+        base.extend(
             [
-                f"周末版{slot_name}，发给{alias}",
-                f"{alias}，今天慢一点也没关系",
+                f"周末给{recipient_alias}的轻松来信",
+                f"{recipient_alias}，今天慢一点也可以",
             ]
         )
-    return choose(rng, base_subjects)
+    if decision.context_kind == "surprise":
+        base.extend(
+            [
+                f"{recipient_alias}，今天是惊喜空投",
+                f"没有理由，就是想给{recipient_alias}写信",
+            ]
+        )
+    return choose(rng, base)
 
 
-def build_lines(
-    rng: random.Random, profile: dict, slot: str, alias: str, context: dict
-) -> tuple[list[str], str]:
-    slot_data = slot_config(profile, slot)
-    notes = profile["relationship_notes"]
-    tone = profile["voice"]
+def build_body(
+    profile: dict,
+    send_dt: dt.datetime,
+    decision: SendDecision,
+) -> tuple[str, str, dict]:
+    send_date = send_dt.date()
+    rng = build_rng(f"{send_date.isoformat()}:{decision.context_kind}")
+    relationship = profile["relationship"]
+    recipient_alias = choose(rng, profile["recipient_aliases"])
+    sender_name = choose(rng, profile["sender_names"])
     signature = choose(rng, profile["signatures"])
+    theme = theme_pack(profile, rng)
+    counter = relationship_counter(profile, send_dt)
+    show_counter = (
+        decision.context_kind == "holiday"
+        or build_rng(f"{send_date.isoformat()}:counter").random()
+        < float(profile["ui_modules"]["counter_probability"])
+    )
+    show_memory = (
+        decision.context_kind in {"holiday", "surprise", "weekend"}
+        or build_rng(f"{send_date.isoformat()}:memory").random()
+        < float(profile["ui_modules"]["memory_probability"])
+    )
 
-    opener = choose(rng, slot_data["openers"]).format(alias=alias)
-    mood = choose(rng, slot_data["mood_lines"])
-    care = choose(rng, slot_data["care_lines"])
-    closer = choose(rng, slot_data["closers"]).format(alias=alias)
-    memory = choose(rng, notes["private_feelings"])
-    habit = choose(rng, notes["care_habits"])
-    sparkle = choose(rng, profile["visual_signs"])
+    opener = choose(rng, profile["voice_blocks"]["openers"]).format(alias=recipient_alias)
+    care = choose(rng, profile["voice_blocks"]["care"]).format(alias=recipient_alias)
+    warmth = choose(rng, profile["voice_blocks"]["warmth"])
+    closer = choose(rng, profile["voice_blocks"]["closers"]).format(alias=recipient_alias)
+    visual_sign = choose(rng, profile["visual_signs"])
+    memory = choose(rng, profile["memory_fragments"]) if show_memory else None
+    micro_line = choose(rng, profile["micro_lines"])
 
-    extra_lines: list[str] = []
-    if context["kind"] == "holiday":
-        holiday_data = context["data"]
-        extra_lines.append(
-            f"今天是{context['label']}，{holiday_data.get('mood', '所以我想把特别一点的喜欢先给你。')}"
-        )
-        holiday_lines = holiday_data.get("extra_lines", [])
-        if holiday_lines:
-            extra_lines.append(choose(rng, holiday_lines))
-    elif context["kind"] == "weekend":
-        extra_lines.append(choose(rng, profile["weekend_style"]["extra_lines"]))
+    special_line = None
+    if decision.context_kind == "holiday":
+        holiday = find_holiday(profile, send_date)
+        if holiday:
+            special_line = f"今天是{holiday['name']}，{holiday['mood']}"
+    elif decision.context_kind == "weekend":
+        special_line = choose(rng, profile["weekend_lines"])
+    elif decision.context_kind == "surprise":
+        special_line = choose(rng, profile["surprise_lines"])
 
-    note_candidates = [
-        f"我知道你有时候会嘴上说还好，但我还是会下意识想提醒你：{habit}",
-        f"说到底，我就是想把这些小关心留给你，像{tone['soft_metaphor']}一样慢慢落在你身上。",
-        f"今天也想认真告诉你，{memory}",
-        f"如果你这会儿正忙，那我就先把这封小邮件放在这里，等你空下来再拆开我的惦记。",
+    sender_badge = f"{sender_name} · {relationship['english_sender_alias']}"
+    chip_text = choose(rng, profile["decorative_chips"])
+
+    plain_lines = [
+        f"{recipient_alias}：",
+        "",
+        opener,
+        warmth,
     ]
-    chosen_notes = pick_unique(rng, note_candidates, 2)
+    if special_line:
+        plain_lines.append(special_line)
+    if memory:
+        plain_lines.append(f"今天突然想起：{memory}")
+    plain_lines.extend([care, closer, visual_sign, "", signature])
+    plain = "\n".join(plain_lines)
 
-    lines = [opener, mood, *extra_lines, *chosen_notes, care, closer, sparkle]
-    return lines, signature
+    sections: list[str] = [
+        f'<p style="margin:0 0 14px 0;">{escape(opener)}</p>',
+        f'<p style="margin:0 0 14px 0;">{escape(warmth)}</p>',
+    ]
+    if special_line:
+        sections.append(
+            '<div style="margin:0 0 16px 0;padding:12px 14px;border-radius:16px;'
+            f'background:{theme["soft"]};border:1px solid {theme["border"]};font-size:14px;'
+            f'line-height:1.8;color:{theme["muted"]};">{escape(special_line)}</div>'
+        )
+    if memory:
+        sections.append(
+            '<div style="margin:0 0 16px 0;padding:14px 16px;border-radius:18px;'
+            f'background:{theme["memory_bg"]};border:1px dashed {theme["memory_border"]};'
+            f'font-size:15px;line-height:1.85;color:{theme["text"]};">'
+            f'<div style="font-size:12px;letter-spacing:0.5px;text-transform:uppercase;opacity:0.7;">'
+            'Memory Flashback</div>'
+            f'<div style="margin-top:8px;">{escape(memory)}</div>'
+            "</div>"
+        )
+    sections.append(f'<p style="margin:0 0 14px 0;">{escape(care)}</p>')
+    sections.append(f'<p style="margin:0;">{escape(closer)}</p>')
 
-
-def build_plain_and_html(slot: str, send_date: dt.date) -> tuple[str, str, str, str]:
-    profile = load_profile()
-    rng = build_rng(send_date, slot)
-    alias = choose(rng, profile["aliases"])
-    context = day_context(profile, send_date)
-    subject = build_subject(rng, profile, slot, alias, context)
-    lines, signature = build_lines(rng, profile, slot, alias, context)
-    slot_title = slot_config(profile, slot)["title"]
-
-    plain = "\n".join(
-        [
-            f"{slot_title}呀，{alias}：",
-            "",
-            *lines,
-            "",
-            signature,
-        ]
-    )
-
-    line_html = "".join(
-        f'<p style="margin:0 0 14px 0;">{escape(line)}</p>' for line in lines[:-1]
-    )
-    accent = escape(slot_config(profile, slot)["accent"])
-    context_badge = escape(context["label"])
-    alias_html = escape(alias)
-    signature_html = escape(signature)
-    sparkle_html = escape(lines[-1])
-    title_html = escape(slot_title)
+    counter_html = ""
+    if show_counter:
+        counter_html = (
+            '<div style="margin:18px 0 0 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));'
+            'gap:10px;">'
+            + "".join(
+                [
+                    stat_card("认识天数", f"{counter['days']} 天", theme),
+                    stat_card("一起走过", f"{counter['hours']} 小时", theme),
+                    stat_card("细细算算", f"{counter['minutes']} 分钟", theme),
+                    stat_card("偷偷偏爱", f"{counter['seconds']} 秒", theme),
+                ]
+            )
+            + "</div>"
+        )
 
     html = f"""\
 <!DOCTYPE html>
 <html lang="zh-CN">
-  <body style="margin:0;padding:0;background:#fff8fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#3f2a35;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fff8fb;padding:14px 0;">
+  <body style="margin:0;padding:0;background:{theme['page']};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:{theme['text']};">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:{theme['page']};padding:18px 0;">
       <tr>
         <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:26px;overflow:hidden;border:1px solid #ffd9e6;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:{theme['card']};border-radius:28px;overflow:hidden;border:1px solid {theme['border']};box-shadow:{theme['shadow']};">
             <tr>
-              <td style="padding:22px 22px 18px 22px;background:linear-gradient(135deg,#ff8aa8 0%,#ffc9d7 100%);color:#ffffff;">
-                <div style="display:inline-block;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,0.22);font-size:13px;letter-spacing:0.5px;">{context_badge} · {accent}</div>
-                <div style="margin-top:12px;font-size:30px;font-weight:700;line-height:1.3;">{title_html}，{alias_html}</div>
-                <div style="margin-top:8px;font-size:15px;line-height:1.7;opacity:0.96;">这是一封定时送达的小偏爱。</div>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:24px 22px 18px 22px;">
-                <div style="font-size:16px;line-height:1.9;color:#4d3340;">
-                  {line_html}
-                </div>
-                <div style="margin-top:10px;padding:14px 16px;border-radius:18px;background:#fff3f8;border:1px dashed #ffbdd0;font-size:14px;line-height:1.8;color:#8d6071;">
-                  {sparkle_html}
+              <td style="padding:26px 24px 20px 24px;background:{theme['hero']};color:#ffffff;">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+                  <div>
+                    <div style="display:inline-block;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,0.18);font-size:12px;letter-spacing:0.6px;">{escape(chip_text)}</div>
+                    <div style="margin-top:14px;font-size:31px;line-height:1.28;font-weight:700;">{escape(recipient_alias)}</div>
+                    <div style="margin-top:8px;font-size:15px;line-height:1.8;opacity:0.95;">{escape(micro_line)}</div>
+                  </div>
+                  <div style="min-width:120px;text-align:right;font-size:12px;line-height:1.8;opacity:0.92;">
+                    <div>{escape(sender_badge)}</div>
+                    <div>{escape(decision.reason)}</div>
+                  </div>
                 </div>
               </td>
             </tr>
             <tr>
-              <td style="padding:0 22px 24px 22px;">
-                <div style="border-top:1px solid #f5d9e4;padding-top:16px;font-size:15px;line-height:1.8;color:#6f4a59;">
-                  <div>♥ ♥ ♥</div>
-                  <div style="margin-top:8px;">{signature_html}</div>
+              <td style="padding:24px;">
+                <div style="font-size:16px;line-height:1.95;color:{theme['text']};">
+                  {''.join(sections)}
+                </div>
+                {counter_html}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 24px 24px 24px;">
+                <div style="padding:16px 18px;border-radius:20px;background:{theme['footer_bg']};border:1px solid {theme['border']};">
+                  <div style="font-size:14px;line-height:1.9;color:{theme['muted']};">{escape(visual_sign)}</div>
+                  <div style="margin-top:10px;font-size:15px;line-height:1.8;color:{theme['text']};">—— {escape(signature)}</div>
                 </div>
               </td>
             </tr>
@@ -275,7 +338,26 @@ def build_plain_and_html(slot: str, send_date: dt.date) -> tuple[str, str, str, 
   </body>
 </html>
 """
-    return subject, plain, html, context["kind"]
+    meta = {
+        "recipient_alias": recipient_alias,
+        "sender_name": sender_name,
+        "signature": signature,
+        "theme_name": theme["name"],
+        "show_counter": show_counter,
+        "context_kind": decision.context_kind,
+    }
+    subject = build_subject(rng, profile, recipient_alias, decision)
+    return subject, plain, html, meta
+
+
+def stat_card(label: str, value: str, theme: dict) -> str:
+    return (
+        f'<div style="padding:14px 14px 12px 14px;border-radius:18px;background:{theme["soft"]};'
+        f'border:1px solid {theme["border"]};">'
+        f'<div style="font-size:12px;line-height:1.6;color:{theme["muted"]};">{escape(label)}</div>'
+        f'<div style="margin-top:4px;font-size:18px;font-weight:700;color:{theme["text"]};">{escape(value)}</div>'
+        "</div>"
+    )
 
 
 def build_message(to_address: str, subject: str, plain: str, html: str) -> EmailMessage:
@@ -286,7 +368,6 @@ def build_message(to_address: str, subject: str, plain: str, html: str) -> Email
         raise SystemExit(
             "Missing sender address. Set AUTO_EMAIL_FROM or AUTO_EMAIL_SMTP_USER."
         )
-
     message = EmailMessage()
     message["From"] = sender
     message["To"] = to_address
@@ -298,27 +379,38 @@ def build_message(to_address: str, subject: str, plain: str, html: str) -> Email
 
 def main() -> None:
     args = parse_args()
-    send_date = resolve_date(args.date)
-    subject, plain, html, context_kind = build_plain_and_html(args.slot, send_date)
+    send_dt = resolve_now(args.date)
+    profile = load_profile()
+    decision = evaluate_send_decision(profile, send_dt, args.force_send)
+
+    if not decision.should_send:
+        print("Skipped love greeting.")
+        print(f"Date: {send_dt.date().isoformat()}")
+        print(f"Reason: {decision.reason}")
+        return
+
+    subject, plain, html, meta = build_body(profile, send_dt, decision)
     message = build_message(args.to, subject, plain, html)
 
     if args.dry_run:
         print("Dry run successful.")
-        print(f"Slot: {args.slot}")
-        print(f"Date: {send_date.isoformat()}")
-        print(f"Context: {context_kind}")
+        print(f"Date: {send_dt.date().isoformat()}")
+        print(f"Reason: {decision.reason}")
+        print(f"Context: {decision.context_kind}")
+        print(f"Theme: {meta['theme_name']}")
+        print(f"Counter module: {'yes' if meta['show_counter'] else 'no'}")
         print(f"To: {args.to}")
         print(f"Subject: {subject}")
-        print("HTML body: yes")
         return
 
     with send_email.connect() as server:
         server.send_message(message, to_addrs=[args.to])
 
     print("Love greeting sent successfully.")
-    print(f"Slot: {args.slot}")
-    print(f"Date: {send_date.isoformat()}")
-    print(f"Context: {context_kind}")
+    print(f"Date: {send_dt.date().isoformat()}")
+    print(f"Reason: {decision.reason}")
+    print(f"Context: {decision.context_kind}")
+    print(f"Theme: {meta['theme_name']}")
     print(f"To: {args.to}")
     print(f"Subject: {subject}")
 

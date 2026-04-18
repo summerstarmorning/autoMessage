@@ -2,20 +2,8 @@ name: Love Mail
 
 on:
   workflow_dispatch:
-    inputs:
-      slot:
-        description: Which greeting slot to send
-        required: true
-        default: morning
-        type: choice
-        options:
-          - morning
-          - noon
-          - night
   schedule:
-    - cron: '7 23 * * *'
-    - cron: '7 5 * * *'
-    - cron: '7 15 * * *'
+    - cron: '17 12 * * *'
 
 jobs:
   send-love-mail:
@@ -40,32 +28,17 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Resolve slot
+      - name: Resolve send mode
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "LOVE_SLOT=${{ inputs.slot }}" >> "$GITHUB_ENV"
-            exit 0
+            echo "LOVE_FORCE_FLAG=--force-send" >> "$GITHUB_ENV"
+          else
+            echo "LOVE_FORCE_FLAG=" >> "$GITHUB_ENV"
           fi
-
-          case "${{ github.event.schedule }}" in
-            "7 23 * * *")
-              echo "LOVE_SLOT=morning" >> "$GITHUB_ENV"
-              ;;
-            "7 5 * * *")
-              echo "LOVE_SLOT=noon" >> "$GITHUB_ENV"
-              ;;
-            "7 15 * * *")
-              echo "LOVE_SLOT=night" >> "$GITHUB_ENV"
-              ;;
-            *)
-              echo "Unknown schedule: ${{ github.event.schedule }}"
-              exit 1
-              ;;
-          esac
 
       - name: Send timed greeting
         run: |
           python "plugins/auto-email/scripts/send_love_greeting.py" \
-            --slot "$LOVE_SLOT" \
-            --to "$LOVE_MAIL_TO"
+            --to "$LOVE_MAIL_TO" \
+            $LOVE_FORCE_FLAG

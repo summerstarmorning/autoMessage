@@ -120,7 +120,17 @@ You can edit that file to change:
 - holiday overrides
 - custom special dates such as birthdays or anniversaries
 
-The automations already call `send_love_greeting.py`, so profile changes take effect on the next scheduled run without recreating the tasks.
+The generator now supports:
+
+- a more personal tone
+- sender aliases such as `夏星晨`, `star`, `STA`, `爱你的npy`
+- richer recipient nicknames
+- memory fragments
+- rotating visual themes
+- an optional "how long we've known each other" module
+- a surprise cadence so it does not have to send every single day
+
+The generator uses HTML/CSS themes. Do not plan on running D3.js or Plotly in the email itself because mail clients generally block JavaScript. If you want chart-like visuals, pre-render them as HTML/CSS, static SVG, or image assets instead.
 
 ## GitHub Actions online version
 
@@ -128,11 +138,9 @@ If you want the messages to send even when your own computer is off, use:
 
 - `.\.github\workflows\love-mail.yml`
 
-This workflow is designed for GitHub Actions and runs three times per day in Beijing time by using UTC cron values:
+This workflow is designed for GitHub Actions and runs once per day in Beijing time:
 
-- `07:00` China time -> `23:00` UTC on the previous day
-- `13:00` China time -> `05:00` UTC
-- `23:00` China time -> `15:00` UTC
+- `20:17` China time -> `12:17` UTC
 
 Required repository secrets:
 
@@ -144,4 +152,5 @@ Recommended `LOVE_MAIL_TO` value for your current use case:
 
 - `3308029362@qq.com`
 
-The greeting generator will still use `Asia/Shanghai` for weekday, weekend, and holiday logic.
+The greeting generator still uses `Asia/Shanghai` for weekday, weekend, and holiday logic.
+The GitHub workflow sends at most once per day, but the script may skip some weekdays to preserve surprise. Holidays always send, and manual workflow runs force a send for testing.
