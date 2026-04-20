@@ -5,9 +5,9 @@
     "english_sender_alias": "star / STA / npy"
   },
   "schedule": {
-    "weekday_interval_days": 2,
-    "always_send_weekends": false,
-    "surprise_probability": 0.18
+    "awake_start_hour": 9,
+    "awake_end_hour": 21,
+    "check_minutes": [17, 47]
   },
   "recipient_aliases": [
     "张娜",

@@ -3,7 +3,7 @@ name: Love Mail
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 12 * * *'
+    - cron: '17,47 9-21 * * *'
 
 jobs:
   send-love-mail:

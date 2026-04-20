@@ -44,6 +44,7 @@ class SendDecision:
     reason: str
     context_kind: str
     holiday_name: str | None = None
+    target_slot: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,41 +102,35 @@ def find_holiday(profile: dict, send_date: dt.date) -> dict | None:
 
 
 def evaluate_send_decision(profile: dict, send_dt: dt.datetime, force_send: bool) -> SendDecision:
+    target_hour, target_minute = daily_target_slot(profile, send_dt.date())
+    target_slot = f"{target_hour:02d}:{target_minute:02d}"
+
     if force_send:
-        return SendDecision(True, "manual override", "manual")
+        return SendDecision(True, "manual override", "manual", target_slot=target_slot)
+
+    current_slot = (send_dt.hour, send_dt.minute)
+    if current_slot != (target_hour, target_minute):
+        return SendDecision(False, f"waiting for daily slot {target_slot}", "skip", target_slot=target_slot)
 
     send_date = send_dt.date()
     holiday = find_holiday(profile, send_date)
     if holiday is not None:
-        return SendDecision(True, "holiday rule", "holiday", holiday["name"])
+        return SendDecision(True, "holiday rule", "holiday", holiday["name"], target_slot)
 
-    meet_date = dt.date.fromisoformat(profile["relationship"]["met_on"])
-    days_since_meet = (send_date - meet_date).days
-    cadence = profile["schedule"]
-    is_weekend = send_date.weekday() >= 5
+    if send_date.weekday() >= 5:
+        return SendDecision(True, "weekend daily rule", "weekend", target_slot=target_slot)
 
-    if is_weekend and cadence.get("always_send_weekends", False):
-        return SendDecision(True, "weekend rule", "weekend")
+    return SendDecision(True, "weekday daily rule", "weekday", target_slot=target_slot)
 
-    weekday_interval = int(cadence.get("weekday_interval_days", 2))
-    if days_since_meet % weekday_interval == 0:
-        return SendDecision(
-            True,
-            f"weekday interval {weekday_interval}",
-            "weekend" if is_weekend else "weekday",
-        )
 
-    surprise_seed = f"{send_date.isoformat()}:{profile['relationship']['met_on']}:surprise"
-    surprise_rng = build_rng(surprise_seed)
-    threshold = float(cadence.get("surprise_probability", 0.16))
-    if surprise_rng.random() < threshold:
-        return SendDecision(
-            True,
-            "surprise rule",
-            "weekend" if is_weekend else "surprise",
-        )
-
-    return SendDecision(False, "cadence skip", "skip")
+def daily_target_slot(profile: dict, send_date: dt.date) -> tuple[int, int]:
+    schedule = profile["schedule"]
+    start_hour = int(schedule["awake_start_hour"])
+    end_hour = int(schedule["awake_end_hour"])
+    check_minutes = [int(value) for value in schedule["check_minutes"]]
+    slots = [(hour, minute) for hour in range(start_hour, end_hour + 1) for minute in check_minutes]
+    rng = build_rng(f"{send_date.isoformat()}:daily-time-slot")
+    return choose(rng, slots)
 
 
 def relationship_counter(profile: dict, send_dt: dt.datetime) -> dict[str, int]:
@@ -387,6 +382,8 @@ def main() -> None:
         print("Skipped love greeting.")
         print(f"Date: {send_dt.date().isoformat()}")
         print(f"Reason: {decision.reason}")
+        if decision.target_slot:
+            print(f"Target slot: {decision.target_slot}")
         return
 
     subject, plain, html, meta = build_body(profile, send_dt, decision)
@@ -397,6 +394,7 @@ def main() -> None:
         print(f"Date: {send_dt.date().isoformat()}")
         print(f"Reason: {decision.reason}")
         print(f"Context: {decision.context_kind}")
+        print(f"Target slot: {decision.target_slot}")
         print(f"Theme: {meta['theme_name']}")
         print(f"Counter module: {'yes' if meta['show_counter'] else 'no'}")
         print(f"To: {args.to}")
@@ -410,6 +408,7 @@ def main() -> None:
     print(f"Date: {send_dt.date().isoformat()}")
     print(f"Reason: {decision.reason}")
     print(f"Context: {decision.context_kind}")
+    print(f"Target slot: {decision.target_slot}")
     print(f"Theme: {meta['theme_name']}")
     print(f"To: {args.to}")
     print(f"Subject: {subject}")
